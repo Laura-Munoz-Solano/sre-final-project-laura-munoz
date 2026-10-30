@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sre-demo-app
+description: Demo orders API instrumented with Prometheus metrics, plus its ServiceMonitor, alert rules and Grafana dashboard.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

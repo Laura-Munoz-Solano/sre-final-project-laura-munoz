@@ -1,0 +1,35 @@
+# Values for the kube-prometheus-stack Helm chart, which installs
+# Prometheus, Alertmanager, Grafana and the Prometheus Operator.
+
+prometheus:
+  prometheusSpec:
+    # Discover ServiceMonitors and PrometheusRules from every namespace and
+    # every Helm release, not only the ones created by this chart.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    retention: 2d
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+
+grafana:
+  # Demo credentials for a local cluster only. Never reuse in a real environment.
+  adminUser: admin
+  adminPassword: sre-academy
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      # Load dashboard ConfigMaps from any namespace (the app lives in "demo").
+      searchNamespace: ALL
+
+# These control-plane components are not reachable in Minikube and would only
+# produce permanently-firing alerts, so their scraping is disabled.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false

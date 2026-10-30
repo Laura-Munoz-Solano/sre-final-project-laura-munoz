@@ -1,0 +1,96 @@
+# CI/CD pipeline
+#   test    -> lint + unit tests
+#   helm    -> lint and render the Helm chart
+#   deploy  -> build the image, deploy the chart to a throw-away Kubernetes
+#              cluster (kind) and smoke-test the /metrics endpoint
+#   publish -> push the image to GitHub Container Registry (main branch only)
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  IMAGE_NAME: sre-demo-app
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r app/requirements-dev.txt
+      - name: Lint
+        run: flake8 app
+      - name: Unit tests
+        run: pytest app -v
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Helm lint
+        run: helm lint charts/sre-demo-app
+      - name: Render templates
+        run: helm template sre-demo-app charts/sre-demo-app > /dev/null
+
+  deploy:
+    needs: [test, helm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t $IMAGE_NAME:ci app/
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: ci
+      - name: Load image into the cluster
+        run: kind load docker-image $IMAGE_NAME:ci --name ci
+      - name: Deploy with Helm
+        # The Prometheus Operator CRDs are not installed in the CI cluster,
+        # so the monitoring objects are skipped here.
+        run: |
+          helm install sre-demo-app charts/sre-demo-app \
+            --set image.tag=ci --set monitoring.enabled=false \
+            --wait --timeout 2m
+      - name: Smoke test
+        run: |
+          kubectl port-forward svc/sre-demo-app 8080:8080 &
+          sleep 5
+          curl -fsS http://localhost:8080/healthz
+          curl -fsS -X POST http://localhost:8080/api/orders
+          curl -fsS http://localhost:8080/metrics | grep demo_http_requests_total
+
+  publish:
+    needs: deploy
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+      - uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

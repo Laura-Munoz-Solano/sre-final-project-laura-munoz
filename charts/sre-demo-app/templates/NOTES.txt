@@ -1,0 +1,4 @@
+sre-demo-app deployed in namespace {{ .Release.Namespace }}.
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }} 8080:{{ .Values.service.port }}
+  curl http://localhost:8080/metrics

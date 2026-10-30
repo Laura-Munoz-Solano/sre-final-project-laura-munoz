@@ -1,0 +1,37 @@
+# Extra values that route the application's alerts to Slack (bonus requirement).
+#
+# The Slack webhook URL is a secret and is NOT stored in this file. It is passed
+# at install time by scripts/setup.sh from the SLACK_WEBHOOK_URL env variable:
+#   --set-string alertmanager.config.global.slack_api_url="$SLACK_WEBHOOK_URL"
+
+alertmanager:
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      # Everything goes to the "null" receiver unless a child route matches,
+      # so only the alerts we own reach Slack.
+      receiver: "null"
+      group_by: ["alertname", "namespace"]
+      group_wait: 30s
+      group_interval: 2m
+      repeat_interval: 2h
+      routes:
+        - receiver: slack-notifications
+          matchers:
+            - service = "sre-demo-app"
+    receivers:
+      - name: "null"
+      - name: slack-notifications
+        slack_configs:
+          - channel: "#sre-alerts"
+            send_resolved: true
+            title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})'
+            text: |-
+              {{ range .Alerts }}*{{ .Annotations.summary }}*
+              {{ .Annotations.description }}
+              {{ end }}
+    # When the app is completely down, do not also notify about latency/errors.
+    inhibit_rules:
+      - source_matchers: ['alertname = "DemoAppDown"']
+        target_matchers: ['service = "sre-demo-app"', 'severity = "warning"']
