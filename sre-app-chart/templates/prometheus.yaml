@@ -1,0 +1,188 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+
+---
+apiVersion: v1
+kind: ServiceAccount # ServiceAccount for Prometheus
+metadata:
+  name: prometheus
+  namespace: monitoring
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+  labels:
+    app: prometheus
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+                - alertmanager.monitoring.svc.cluster.local:9093
+
+    rule_files:
+      - "/etc/prometheus/rules/*.rules"
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'alertmanager'
+        static_configs:
+          - targets: ['alertmanager.monitoring.svc.cluster.local:9093']
+
+      - job_name: 'sre-demo-app' # Pods in sre-app with the prometheus.io/scrape: "true" annotation
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ['sre-app']
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: (.+):(?:\d+);(\d+)
+            replacement: ${1}:${2}
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: monitoring
+  labels:
+    app: prometheus
+data:
+  sre-demo-app.rules: |
+    groups:
+      - name: sre-demo-app
+        rules:
+          # More than 5% of the requests are failing with 5xx
+          - alert: HighErrorRate
+            expr: sum(rate(http_requests_total{job="sre-demo-app", status=~"5.."}[2m])) / sum(rate(http_requests_total{job="sre-demo-app"}[2m])) > 0.05
+            for: 2m
+            labels:
+              severity: critical
+              service: sre-demo-app
+            annotations:
+              summary: High error rate on sre-demo-app
+              description: "{{`{{ $value | humanizePercentage }}`}} of the requests failed in the last 2 minutes (limit: 5%)"
+
+          # The 95th percentile of the latency is more than 1 second
+          - alert: HighLatency
+            expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="sre-demo-app"}[2m])) by (le)) > 1
+            for: 2m
+            labels:
+              severity: warning
+              service: sre-demo-app
+            annotations:
+              summary: High latency on sre-demo-app
+              description: "p95 latency is {{`{{ $value | humanizeDuration }}`}} (limit: 1s)"
+
+          # Prometheus can't scrape any pod of the app
+          - alert: AppDown
+            expr: absent(up{job="sre-demo-app"} == 1)
+            for: 1m
+            labels:
+              severity: critical
+              service: sre-demo-app
+            annotations:
+              summary: sre-demo-app is down
+              description: No pod of sre-demo-app is reporting metrics
+
+          # process_start_time_seconds changes every time the container restarts
+          - alert: PodRestarting
+            expr: changes(process_start_time_seconds{job="sre-demo-app"}[10m]) > 2
+            labels:
+              severity: warning
+              service: sre-demo-app
+            annotations:
+              summary: sre-demo-app pod is restarting
+              description: "Pod {{`{{ $labels.pod }}`}} restarted more than 2 times in 10 minutes"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-deployment
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus # Use the dedicated service account
+      containers:
+        - name: prometheus
+          image: prom/prometheus:latest
+          args:
+            - "--config.file=/etc/prometheus/config/prometheus.yml"
+            - "--storage.tsdb.retention.time=2d"
+            - "--web.enable-lifecycle"
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config-volume
+              mountPath: /etc/prometheus/config/
+            - name: prometheus-rules-volume
+              mountPath: /etc/prometheus/rules/
+            - name: prometheus-storage
+              mountPath: /prometheus
+      volumes:
+        - name: prometheus-config-volume
+          configMap:
+            name: prometheus-config
+        - name: prometheus-rules-volume
+          configMap:
+            name: prometheus-rules
+        - name: prometheus-storage # emptyDir for simplicity, the data is lost if the pod restarts
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - protocol: TCP
+      port: 9090
+      targetPort: 9090
+  type: NodePort
+{{- end }}

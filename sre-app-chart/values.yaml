@@ -1,0 +1,26 @@
+# Default values for sre-app-chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Number of pods for the application
+replicaCount: 2
+
+# Application image. cluster.sh builds it inside Minikube with "minikube image build"
+image:
+  repository: sre-demo-app
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+# Probability (0 to 1) that POST /api/orders fails. Used to test the alerts.
+# Example: helm upgrade sre-app ./sre-app-chart --reuse-values --set errorRate=0.5
+errorRate: "0"
+
+# Slack incoming webhook URL for Alertmanager.
+# Don't write the URL here! It's a secret. cluster.sh passes it with --set
+# from the SLACK_WEBHOOK_URL environment variable.
+slackWebhookUrl: ""
+
+# Deploy Prometheus, Alertmanager and Grafana.
+# The CI pipeline sets this to false to test only the app.
+monitoring:
+  enabled: true

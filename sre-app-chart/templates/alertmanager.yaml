@@ -1,0 +1,120 @@
+{{- if .Values.monitoring.enabled }}
+{{- if .Values.slackWebhookUrl }}
+# The Slack webhook is a secret, so it goes in a Secret and not in the ConfigMap
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-slack
+  namespace: monitoring
+  labels:
+    app: alertmanager
+type: Opaque
+stringData:
+  slack-webhook-url: {{ .Values.slackWebhookUrl | quote }}
+
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+  labels:
+    app: alertmanager
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      receiver: {{ if .Values.slackWebhookUrl }}slack-notifications{{ else }}"null"{{ end }}
+      group_by: ['alertname']
+      group_wait: 30s
+      group_interval: 2m
+      repeat_interval: 2h
+
+    receivers:
+      - name: "null" # Used when there is no Slack webhook
+      {{- if .Values.slackWebhookUrl }}
+      - name: slack-notifications
+        slack_configs:
+          - api_url_file: /etc/alertmanager/secrets/slack-webhook-url
+            channel: '#sre-alerts'
+            send_resolved: true
+            title: '{{`[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})`}}'
+            text: |-
+              {{`{{ range .Alerts }}*{{ .Annotations.summary }}*
+              {{ .Annotations.description }}
+              {{ end }}`}}
+      {{- end }}
+
+    # If the app is down, don't send the warning alerts too (they are caused by the same problem)
+    inhibit_rules:
+      - source_matchers: ['alertname = "AppDown"']
+        target_matchers: ['severity = "warning"']
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager-deployment
+  namespace: monitoring
+  labels:
+    app: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:latest
+          args:
+            - "--config.file=/etc/alertmanager/config/alertmanager.yml"
+            - "--storage.path=/alertmanager"
+          ports:
+            - containerPort: 9093
+          volumeMounts:
+            - name: alertmanager-config-volume
+              mountPath: /etc/alertmanager/config/
+            {{- if .Values.slackWebhookUrl }}
+            - name: alertmanager-slack-volume
+              mountPath: /etc/alertmanager/secrets/
+              readOnly: true
+            {{- end }}
+            - name: alertmanager-storage
+              mountPath: /alertmanager
+      volumes:
+        - name: alertmanager-config-volume
+          configMap:
+            name: alertmanager-config
+        {{- if .Values.slackWebhookUrl }}
+        - name: alertmanager-slack-volume
+          secret:
+            secretName: alertmanager-slack
+        {{- end }}
+        - name: alertmanager-storage
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+spec:
+  selector:
+    app: alertmanager
+  ports:
+    - protocol: TCP
+      port: 9093
+      targetPort: 9093
+  type: NodePort
+{{- end }}

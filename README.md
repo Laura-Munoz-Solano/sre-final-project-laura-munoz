@@ -1,6 +1,6 @@
 # SRE Academy Final Project
 
-![CI/CD](https://github.com/Laura-Munoz-Solano/sre-final-project-laura-munoz/actions/workflows/ci-cd.yaml/badge.svg)
+![CI/CD](https://github.com/Laura-Munoz-Solano/sre-final-project-laura-munoz/actions/workflows/ci.yml/badge.svg)
 
 This is my final project for the SRE Academy. It's a small Python app (a fake
 coffee shop orders API) running on Kubernetes, monitored with Prometheus and
@@ -11,8 +11,10 @@ practice the monitoring side: exposing metrics, collecting them, building a
 dashboard, writing alerts, and checking that an alert actually reaches me
 when something breaks.
 
-This was my first time working with most of these tools, so I also included a
-section at the end about the problems I ran into and how I fixed them.
+I built it the same way we worked in the course exercises: Colima and
+Minikube, my own Kubernetes manifests for Prometheus, Alertmanager and
+Grafana, a Helm chart to install everything together, and a `cluster.sh`
+script to set it all up.
 
 Laura Muñoz, 2026
 
@@ -43,14 +45,14 @@ Laura Muñoz, 2026
 | Requirement | What I did | Where |
 |-------------|------------|-------|
 | App that emits metrics | Flask API using the `prometheus_client` library | [`app/`](app/) |
-| Kubernetes deployment | Deployed on Minikube with a Helm chart (2 replicas, health checks, resource limits) | [`charts/sre-demo-app/`](charts/sre-demo-app/) |
-| Prometheus | Scrapes the app automatically through a `ServiceMonitor` | [`servicemonitor.yaml`](charts/sre-demo-app/templates/servicemonitor.yaml) |
-| Grafana | Dashboard with the four golden signals, loaded from a JSON file | [`dashboard.json`](charts/sre-demo-app/files/dashboard.json) |
-| Alertmanager | 4 alert rules, routed by labels | [`alert-rules.yaml`](charts/sre-demo-app/files/alert-rules.yaml) |
+| Kubernetes deployment | Deployed on Minikube (2 replicas, health checks, resource limits) | [`deployment.yaml`](sre-app-chart/templates/deployment.yaml) |
+| Prometheus | Finds the app pods with the `prometheus.io/scrape` annotation and scrapes them | [`prometheus.yaml`](sre-app-chart/templates/prometheus.yaml) |
+| Grafana | Dashboard with the four golden signals, provisioned from a ConfigMap | [`grafana.yaml`](sre-app-chart/templates/grafana.yaml) |
+| Alertmanager | 4 alert rules in Prometheus, sent to Alertmanager | [`alertmanager.yaml`](sre-app-chart/templates/alertmanager.yaml) |
 | Documentation | This README, LICENSE, CONTRIBUTING and screenshots | |
-| Bonus: notifications | Alerts are sent to a Slack channel | [`alertmanager-slack-values.yaml`](monitoring/alertmanager-slack-values.yaml) |
-| Bonus: IaC | Everything is installed with Helm and values files | [`charts/`](charts/), [`monitoring/`](monitoring/) |
-| Bonus: CI/CD | GitHub Actions pipeline that tests, deploys to a test cluster and publishes the image | [`ci-cd.yaml`](.github/workflows/ci-cd.yaml) |
+| Bonus: notifications | Alertmanager sends the alerts to a Slack channel | [`alertmanager.yaml`](sre-app-chart/templates/alertmanager.yaml) |
+| Bonus: IaC | Everything is installed with one Helm chart | [`sre-app-chart/`](sre-app-chart/) |
+| Bonus: CI/CD | GitHub Actions pipeline that tests, deploys to a test cluster and publishes the image | [`ci.yml`](.github/workflows/ci.yml) |
 
 ## How it works
 
@@ -59,87 +61,80 @@ flowchart LR
     user([Load generator]) -->|HTTP| svc
 
     subgraph cluster[Minikube]
-        subgraph demo[namespace: demo]
-            svc[Service] --> pod1[app pod]
+        subgraph app[namespace: sre-app]
+            svc[sre-demo-app-service] --> pod1[app pod]
             svc --> pod2[app pod]
-            sm[ServiceMonitor]
-            rules[PrometheusRule]
-            dash[Dashboard ConfigMap]
         end
         subgraph monitoring[namespace: monitoring]
-            operator[Prometheus Operator]
             prom[Prometheus]
             am[Alertmanager]
             graf[Grafana]
         end
     end
 
-    operator -. watches .-> sm
-    operator -. watches .-> rules
     prom -->|scrapes /metrics| pod1
     prom -->|scrapes /metrics| pod2
     prom -->|sends alerts| am
     graf -->|queries| prom
-    graf -. loads .-> dash
     am -->|webhook| slack([Slack #sre-alerts])
 ```
 
 The way I understand the flow:
 
 1. The app exposes its metrics at `/metrics`.
-2. My Helm chart creates a `ServiceMonitor`. The Prometheus Operator reads it
-   and tells Prometheus to scrape every pod behind the app's Service. I don't
-   have to list the pods anywhere, so if a pod gets replaced, Prometheus
-   finds the new one by itself.
-3. The chart also creates a `PrometheusRule` with my alert rules. Prometheus
-   checks them every 15 seconds and sends the ones that fire to Alertmanager.
-4. Alertmanager sends alerts with the label `service=sre-demo-app` to Slack.
-   Other alerts from the cluster go to a "null" receiver so the channel only
-   gets alerts about my app.
-5. Grafana reads from Prometheus. The dashboard lives in a ConfigMap, so it's
-   saved in the repo instead of being built by hand in the UI.
-
-For the monitoring stack I used the
-[kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)
-Helm chart, which installs Prometheus, Alertmanager, Grafana and the Operator
-together.
+2. The app pods have the annotations `prometheus.io/scrape: "true"`,
+   `prometheus.io/port` and `prometheus.io/path`. Prometheus uses Kubernetes
+   service discovery to find the pods with those annotations, so I don't have
+   to list the pods anywhere. If a pod gets replaced, Prometheus finds the new
+   one by itself. That's why Prometheus has its own ServiceAccount and a
+   ClusterRole that lets it read pods.
+3. The alert rules are in a ConfigMap mounted in Prometheus. Prometheus checks
+   them every 15 seconds and sends the ones that fire to Alertmanager.
+4. Alertmanager groups the alerts and sends them to Slack. The webhook URL is
+   in a Kubernetes Secret, not in the ConfigMap.
+5. Grafana gets the Prometheus datasource and the dashboard from ConfigMaps,
+   so they are saved in the repo instead of being created by hand in the UI.
 
 ## Repo structure
 
 ```
 .
-├── app/                     # Flask app, Dockerfile and unit tests
-├── charts/sre-demo-app/     # Helm chart for the app
-│   ├── templates/           # Deployment, Service, ServiceMonitor, PrometheusRule, dashboard
-│   ├── files/               # alert-rules.yaml and dashboard.json
-│   └── values.yaml
-├── monitoring/              # values for kube-prometheus-stack and Slack routing
-├── scripts/                 # setup, port-forward, load generator, teardown
-├── .github/workflows/       # CI/CD pipeline
-└── docs/screenshots/        # evidence
+├── app/                        # Flask app, Dockerfile and unit tests
+├── sre-app-chart/              # Helm chart
+│   ├── Chart.yaml
+│   ├── values.yaml
+│   └── templates/
+│       ├── deployment.yaml               # app Deployment and Service
+│       ├── prometheus-rbac-cluster.yaml  # permissions for Prometheus
+│       ├── prometheus.yaml               # config, alert rules, Deployment and Service
+│       ├── alertmanager.yaml             # config, Slack secret, Deployment and Service
+│       └── grafana.yaml                  # datasource, dashboard, Deployment and Service
+├── cluster.sh                  # sets up everything
+├── port-forward.sh             # opens the UIs on localhost
+├── generate-load.sh            # sends traffic to the app
+├── cleanup.sh                  # removes everything
+├── .github/workflows/ci.yml    # CI/CD pipeline
+└── docs/screenshots/           # evidence
 ```
 
 ## What you need
 
-- Docker. I used [Colima](https://github.com/abiosoft/colima) on a Mac, but
-  Docker Desktop should work too.
+- [Colima](https://github.com/abiosoft/colima) (or Docker Desktop)
 - [Minikube](https://minikube.sigs.k8s.io/docs/start/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [Helm](https://helm.sh/docs/intro/install/)
 
-On a Mac:
+On a Mac they can be installed with Homebrew (`cluster.sh` also installs them
+if they're missing):
 
 ```bash
 brew install colima docker minikube kubectl helm
-colima start --cpu 4 --memory 8
 ```
 
 Versions I used: Minikube 1.39, kubectl 1.37, Helm 4.3, Docker Engine 29.
 The cluster needs around 4 CPUs and 6 GB of RAM.
 
 ## How to deploy it
-
-The easy way is the setup script:
 
 ```bash
 git clone https://github.com/Laura-Munoz-Solano/sre-final-project-laura-munoz.git
@@ -148,30 +143,24 @@ cd sre-final-project-laura-munoz
 # optional, only if you want Slack alerts (see "Slack setup")
 export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
 
-./scripts/setup.sh
+./cluster.sh
 ```
 
-The script starts Minikube, installs the monitoring stack, builds the app
-image inside Minikube and installs the app. It took me about 3 minutes. You
-can run it again safely; it just updates what's already there.
+`cluster.sh` does this:
 
-If you prefer to do it step by step:
+1. Checks that the tools are installed.
+2. Starts Colima and Minikube if they're not running.
+3. Removes a previous install of the project, if there is one.
+4. Builds the app image inside Minikube (`minikube image build`).
+5. Installs the Helm chart (`helm install sre-app ./sre-app-chart`).
+6. Waits for the pods to be ready and shows their status.
+
+If you prefer to do it by hand:
 
 ```bash
-minikube start --cpus=4 --memory=6g
-
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
-helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
-  --namespace monitoring --create-namespace \
-  -f monitoring/kube-prometheus-stack-values.yaml --wait --timeout 10m
-
-minikube image build -t sre-demo-app:1.0.0 app/
-
-helm upgrade --install sre-demo-app charts/sre-demo-app \
-  --namespace demo --create-namespace --wait
-
-kubectl get pods -n demo
+minikube image build -t sre-demo-app:1.0.0 ./app
+helm install sre-app ./sre-app-chart --set-string slackWebhookUrl="$SLACK_WEBHOOK_URL"
+kubectl get pods -n sre-app
 kubectl get pods -n monitoring
 ```
 
@@ -180,7 +169,7 @@ kubectl get pods -n monitoring
 Open the UIs on localhost (leave this running in its own terminal):
 
 ```bash
-./scripts/port-forward.sh
+./port-forward.sh
 ```
 
 | Service | URL |
@@ -188,14 +177,14 @@ Open the UIs on localhost (leave this running in its own terminal):
 | App | http://localhost:8080 |
 | Prometheus | http://localhost:9090 |
 | Alertmanager | http://localhost:9093 |
-| Grafana | http://localhost:3000 (user `admin`, password `sre-academy`, only for local testing) |
+| Grafana | http://localhost:3000 (user `admin`, password `admin`, it asks to change it on the first login) |
 
 Then send some traffic from another terminal:
 
 ```bash
-./scripts/generate-load.sh normal 900   # normal traffic for 15 minutes
-./scripts/generate-load.sh errors 900   # adds failing requests -> error rate alert
-./scripts/generate-load.sh slow 900     # adds slow requests -> latency alert
+./generate-load.sh normal 900   # normal traffic for 15 minutes
+./generate-load.sh errors 900   # adds failing requests -> HighErrorRate alert
+./generate-load.sh slow 900     # adds slow requests -> HighLatency alert
 ```
 
 The dashboard is in Grafana under *Dashboards > SRE Demo App - Golden Signals*.
@@ -204,10 +193,10 @@ Two other ways to break things on purpose:
 
 ```bash
 # make half of the orders fail
-helm upgrade sre-demo-app charts/sre-demo-app -n demo --reuse-values --set errorRate=0.5
+helm upgrade sre-app ./sre-app-chart --reuse-values --set errorRate=0.5
 
-# take the app down completely
-kubectl -n demo scale deployment sre-demo-app --replicas=0
+# take the app down completely -> AppDown alert
+kubectl -n sre-app scale deployment sre-demo-app --replicas=0
 ```
 
 ## Metrics
@@ -217,19 +206,18 @@ latency and saturation.
 
 | Metric | Type | What it tells me |
 |--------|------|------------------|
-| `demo_http_requests_total` | Counter | Requests per endpoint, method and status code (traffic and errors) |
-| `demo_http_request_duration_seconds` | Histogram | How long requests take (latency) |
-| `demo_http_requests_in_progress` | Gauge | Requests being handled right now (saturation) |
-| `process_resident_memory_bytes` | Gauge | Memory used by each pod (saturation) |
-| `demo_orders_created_total` | Counter | Orders per product (a "business" metric) |
-| `demo_app_info` | Info | App version; also used to check if the app is up |
+| `http_requests_total` | Counter | Requests per endpoint, method and status code (traffic and errors) |
+| `http_request_duration_seconds` | Histogram | How long requests take (latency) |
+| `http_requests_in_progress` | Gauge | Requests being handled right now (saturation) |
+| `process_resident_memory_bytes` | Gauge | Memory used by each pod (saturation, comes with the client library) |
+| `orders_created_total` | Counter | Orders per product |
 
 A few things I learned while doing this:
 
 - The `endpoint` label uses the route (`/api/orders`) instead of the full URL,
   so the number of time series doesn't keep growing.
-- I left the health check and `/metrics` requests out of the traffic numbers,
-  because otherwise Kubernetes probes would count as user traffic.
+- I left the health checks and `/metrics` out of the traffic numbers, because
+  otherwise the Kubernetes probes would count as user traffic.
 - I used a histogram for latency so I can calculate percentiles (p50, p95,
   p99) across both pods.
 
@@ -237,13 +225,13 @@ Some queries I used a lot:
 
 ```promql
 # requests per second by endpoint
-sum(rate(demo_http_requests_total[2m])) by (endpoint)
+sum(rate(http_requests_total{job="sre-demo-app"}[2m])) by (endpoint)
 
 # error rate
-sum(rate(demo_http_requests_total{status=~"5.."}[2m])) / sum(rate(demo_http_requests_total[2m]))
+sum(rate(http_requests_total{job="sre-demo-app", status=~"5.."}[2m])) / sum(rate(http_requests_total{job="sre-demo-app"}[2m]))
 
 # p95 latency
-histogram_quantile(0.95, sum(rate(demo_http_request_duration_seconds_bucket[2m])) by (le))
+histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="sre-demo-app"}[2m])) by (le))
 ```
 
 ## SLOs
@@ -260,14 +248,14 @@ How I would measure them in Prometheus:
 
 ```promql
 # availability
-sum(rate(demo_http_requests_total{status!~"5.."}[30d])) / sum(rate(demo_http_requests_total[30d]))
+sum(rate(http_requests_total{job="sre-demo-app", status!~"5.."}[30d])) / sum(rate(http_requests_total{job="sre-demo-app"}[30d]))
 
-# latency (250 ms is one of the histogram buckets)
-sum(rate(demo_http_request_duration_seconds_bucket{le="0.25"}[30d])) / sum(rate(demo_http_request_duration_seconds_count[30d]))
+# latency (250 ms is one of the default histogram buckets)
+sum(rate(http_request_duration_seconds_bucket{job="sre-demo-app", le="0.25"}[30d])) / sum(rate(http_request_duration_seconds_count{job="sre-demo-app"}[30d]))
 ```
 
-With normal traffic the app had 0% errors and a p95 of about 80 ms, so it was
-well inside both.
+With normal traffic the app had 0% errors and a p95 well under 250 ms, so it
+was inside both.
 
 My alerts are simpler than these SLOs (fixed thresholds). I read about
 "burn rate" alerts, which are the more correct way to alert on SLOs, but I
@@ -277,59 +265,62 @@ didn't get to implement them yet.
 
 | Alert | When it fires | Waits | Severity |
 |-------|---------------|-------|----------|
-| `DemoAppHighErrorRate` | More than 5% of requests return 5xx | 2 min | critical |
-| `DemoAppHighLatency` | p95 latency is over 1 second | 2 min | warning |
-| `DemoAppDown` | Prometheus can't get metrics from any pod | 1 min | critical |
-| `DemoAppPodRestarting` | A pod restarted more than twice in 10 minutes | | warning |
+| `HighErrorRate` | More than 5% of requests return 5xx | 2 min | critical |
+| `HighLatency` | p95 latency is over 1 second | 2 min | warning |
+| `AppDown` | Prometheus can't scrape any app pod | 1 min | critical |
+| `PodRestarting` | A pod restarted more than twice in 10 minutes | | warning |
 
 The "waits" column is the `for:` setting. The condition has to stay true for
 that long before the alert fires, so a short spike doesn't send a message.
+
+For `PodRestarting` I used `process_start_time_seconds`, a metric that the
+Python client exposes by default. It changes every time the container starts,
+so counting its changes tells me how many times the pod restarted.
 
 In Alertmanager I also set up:
 
 - **Grouping** by alert name, so several pods with the same problem become one
   message.
 - **Resolved notifications**, so Slack also tells me when the problem is gone.
-- **An inhibition rule:** if `DemoAppDown` is firing, the warning alerts for the
-  app are muted, because they would just be noise from the same problem.
+- **An inhibition rule:** if `AppDown` is firing, the warning alerts are muted,
+  because they would just be noise from the same problem.
 
 ## What to do when an alert fires
 
 Short notes for each alert, like a mini runbook.
 
-**DemoAppHighErrorRate**
+**HighErrorRate**
 
 1. See which endpoint is failing:
-   `sum(rate(demo_http_requests_total{status=~"5.."}[5m])) by (endpoint)`
+   `sum(rate(http_requests_total{job="sre-demo-app", status=~"5.."}[5m])) by (endpoint)`
 2. Check the pods and their logs:
-   `kubectl -n demo get pods` and `kubectl -n demo logs deploy/sre-demo-app --tail=100`
-3. Check if something changed recently: `helm -n demo history sre-demo-app`
-4. Fix: roll back with `helm -n demo rollback sre-demo-app`, or set
-   `errorRate` back to 0 if it was failure injection.
+   `kubectl -n sre-app get pods` and `kubectl -n sre-app logs deploy/sre-demo-app --tail=100`
+3. Check if something changed recently: `helm history sre-app`
+4. Fix: roll back with `helm rollback sre-app`, or set `errorRate` back to 0
+   if it was failure injection.
 
-**DemoAppHighLatency**
+**HighLatency**
 
 1. See which endpoint is slow:
-   `histogram_quantile(0.95, sum(rate(demo_http_request_duration_seconds_bucket[5m])) by (le, endpoint))`
+   `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="sre-demo-app"}[5m])) by (le, endpoint))`
 2. Look at the saturation panels in Grafana (requests in progress, memory).
 3. Fix: add replicas with
-   `kubectl -n demo scale deployment sre-demo-app --replicas=4` and look for
+   `kubectl -n sre-app scale deployment sre-demo-app --replicas=4` and look for
    the slow part (in this app it's `/api/slow`).
 
-**DemoAppDown**
+**AppDown**
 
-1. Check if the pods exist and are running: `kubectl -n demo get pods`
-2. If they're running, check the target in Prometheus (*Status > Target health*)
-   and the Service: `kubectl -n demo get svc,servicemonitor,endpoints`
-3. Fix: `kubectl -n demo scale deployment sre-demo-app --replicas=2`, or roll back.
+1. Check if the pods exist and are running: `kubectl -n sre-app get pods`
+2. If they're running, check the target in Prometheus (*Status > Target health*).
+3. Fix: `kubectl -n sre-app scale deployment sre-demo-app --replicas=2`, or roll back.
 
-**DemoAppPodRestarting**
+**PodRestarting**
 
 1. See why the pod restarted:
-   `kubectl -n demo describe pod <pod>` and `kubectl -n demo logs <pod> --previous`
+   `kubectl -n sre-app describe pod <pod>` and `kubectl -n sre-app logs <pod> --previous`
 2. `OOMKilled` means it ran out of memory; probe failures mean the app is too
    slow to answer `/healthz`.
-3. Fix: roll back, or change the `resources` in `values.yaml`.
+3. Fix: roll back, or change the `resources` in `deployment.yaml`.
 
 ## Slack setup
 
@@ -342,77 +333,91 @@ Short notes for each alert, like a mini runbook.
    export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
    curl -X POST -H 'Content-type: application/json' --data '{"text":"test"}' "$SLACK_WEBHOOK_URL"
    ```
-5. Run `./scripts/setup.sh` in the same terminal.
+5. Run `./cluster.sh` in the same terminal.
 
-The webhook URL works like a password, so it's passed in when installing and
-it's not saved anywhere in the repo.
+The webhook URL works like a password, so `cluster.sh` passes it to Helm with
+`--set-string` and Helm puts it in a Kubernetes Secret. It's not saved
+anywhere in the repo. If the variable is empty, Alertmanager still runs but
+uses a "null" receiver.
 
 ## Testing an incident
 
 To check that everything worked end to end, I ran the error load generator
-and wrote down what happened:
+and wrote down what happened (times are Costa Rica time):
 
 | Time | What happened |
 |------|---------------|
-| 13:39 | Started `generate-load.sh errors`. About 9% of requests started failing |
-| ~13:40 | `DemoAppHighErrorRate` went to **Pending** in Prometheus |
-| 13:41 | After 2 minutes it changed to **Firing** (error rate was 8.9%) |
-| 13:42 | The `[FIRING]` message arrived in Slack |
-| 13:54 | The load generator finished |
-| 13:56 | The `[RESOLVED]` message arrived in Slack |
+| 9:45 | Started `./generate-load.sh errors 900`. About 9% of requests started failing |
+| 9:47 | `HighErrorRate` went to **Pending** in Prometheus |
+| 9:49 | After 2 minutes it changed to **Firing** (error rate was 9.4%) |
+| 9:49 | The `[FIRING]` message arrived in Slack |
+| 10:00 | The load generator finished |
+| 10:03 | The `[RESOLVED]` message arrived in Slack |
 
-So it took about 3 minutes from the first errors to the Slack message, which
-makes sense with the 2-minute window in the query plus the 2-minute `for:`.
+It took about 4 minutes from the first errors to the Slack message. That
+makes sense: the query uses a 2-minute window, then the `for:` waits 2 more
+minutes, and Alertmanager waits 30 seconds before sending a new group.
+
+One thing I noticed: the `[RESOLVED]` message still shows the last error
+rate (9.341%). Alertmanager sends the description from the last time the
+alert was active, not the current value.
 
 Something I didn't plan: while I was working on the project my laptop went to
-sleep a couple of times, and both times I got a `DemoAppDown` alert in Slack
+sleep a couple of times, and both times I got an "app down" alert in Slack
 that resolved by itself when the laptop woke up. It was nice to see the
 monitoring catch a real outage and not only the one I caused on purpose.
 
 ## CI/CD
 
-The pipeline is in [`.github/workflows/ci-cd.yaml`](.github/workflows/ci-cd.yaml)
-and runs on every push and pull request:
+The pipeline is in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and
+runs on every push and pull request to `main`:
 
-1. **test**: runs flake8 and the unit tests.
-2. **helm**: checks that the Helm chart is valid.
-3. **deploy**: builds the image, creates a temporary Kubernetes cluster with
-   kind, installs the chart and checks that `/healthz` and `/metrics` respond.
-4. **publish**: only on `main`, pushes the image to GitHub Container Registry.
+1. **Run Tests and Quality Checks**: flake8 and the unit tests.
+2. **Validate Helm Chart**: `helm lint` and `helm template`.
+3. **Deploy to Test Cluster (kind)**: builds the image, creates a temporary
+   Kubernetes cluster with kind, installs the chart (only the app) and checks
+   that `/healthz` and `/metrics` respond.
+4. **Build and Push Image**: only on `main`, pushes the image to GitHub
+   Container Registry.
 
-Each step needs the previous one to pass, so a broken image never gets
+Each job needs the previous ones to pass, so a broken image never gets
 published.
 
 ## Problems I ran into
 
 This part took me the most time, so I wanted to write it down.
 
+**My first version used kube-prometheus-stack.** At first I installed the
+monitoring with the community Helm chart, which uses the Prometheus Operator,
+ServiceMonitors and PrometheusRules. It worked, but it hid a lot of what
+happens inside and it was far from what we did in the course. I rewrote it
+with my own manifests (like in exercises 12, 13 and 14), and now I understand
+each piece: the scrape config, the rules file, the Alertmanager config and the
+Grafana provisioning.
+
+**My graphs showed `endpoint="http"` instead of my routes.** This happened
+with the first version: the ServiceMonitor added its own `endpoint` label (the
+port name) and it replaced the one from my app. With my own scrape config I
+decide which labels are added (`namespace` and `pod`), so it doesn't happen
+anymore.
+
 **Prometheus only showed one target.** When I opened Prometheus I only saw a
-target called `prometheus` and none of my app. It turned out I had another
-Prometheus installed on my Mac from an earlier lab, already using port 9090,
-so the port-forward couldn't use it and the browser was showing the wrong
+target called `prometheus` and none of my app. I had another Prometheus
+installed on my Mac from an earlier lab, already using port 9090, so the
+port-forward couldn't use it and the browser was showing the wrong
 Prometheus. I found it with `lsof -nP -iTCP:9090 -sTCP:LISTEN` and stopped it
 with `brew services stop prometheus`.
 
-**My graphs showed `endpoint="http"` instead of my routes.** Prometheus adds
-its own label called `endpoint` (the port name, `http`), and by default it
-replaces the app's label with the same name. I fixed it by adding
-`honorLabels: true` to the ServiceMonitor so the app's label is kept.
-
 **The load generator kept stopping.** When I restarted the port-forward, one
-request failed and the whole script stopped because of `set -e`. I removed the
-`-e` so it keeps sending traffic even if a request fails.
+request failed and the whole script stopped because of `set -e`. Now the
+script keeps sending traffic even if a request fails.
 
 **The memory panel in Grafana said "No data".** The query used container
-metrics that didn't return anything for my app in Minikube on Colima. I
-changed it to `process_resident_memory_bytes`, which the app exposes itself.
+metrics that didn't return anything in Minikube on Colima. I changed it to
+`process_resident_memory_bytes`, which the app exposes itself.
 
 **Docker wasn't connecting.** `docker version` failed because my Docker CLI
 was pointing to Colima, which wasn't running. `colima start` fixed it.
-
-**The error rate graph went up to 10000%.** When all values were 0, Grafana
-picked a weird scale for the axis. I set a soft max of 10% so it's readable
-and still grows if errors go higher.
 
 ## Screenshots
 
@@ -444,7 +449,7 @@ and still grows if errors go higher.
 
 ![Alert firing](docs/screenshots/07-alert-firing.png)
 
-**The alert in Alertmanager, routed to Slack**
+**The alert in Alertmanager**
 
 ![Alertmanager](docs/screenshots/08-alertmanager.png)
 
@@ -461,27 +466,29 @@ and still grows if errors go higher.
 | Problem | What worked for me |
 |---------|--------------------|
 | `docker version` has no "Server" section | Start Docker: `colima start` (or open Docker Desktop) |
-| App pods stuck in `ErrImageNeverPull` | Build the image inside Minikube: `minikube image build -t sre-demo-app:1.0.0 app/` |
+| App pods stuck in `ErrImageNeverPull` or `ImagePullBackOff` | Build the image inside Minikube: `minikube image build -t sre-demo-app:1.0.0 ./app` |
 | Prometheus shows only a target called `prometheus` | Something else is using port 9090. Check with `lsof -nP -iTCP:9090 -sTCP:LISTEN`, stop it and restart the port-forward |
-| Graphs show `endpoint="http"` | The ServiceMonitor needs `honorLabels: true` |
-| Dashboard doesn't show up in Grafana | Wait a minute, then check `kubectl get configmap -n demo -l grafana_dashboard=1` |
+| The `sre-demo-app` target is missing in Prometheus | Check the pod annotations: `kubectl -n sre-app get pods -o yaml \| grep prometheus.io` |
+| I changed an alert rule but Prometheus still shows the old one | Restart Prometheus: `kubectl -n monitoring rollout restart deployment prometheus-deployment` |
 | Pods stuck in `Pending` | Minikube needs more resources: `minikube delete && minikube start --cpus=4 --memory=6g` |
-| No Slack message | Check the Alertmanager logs: `kubectl logs -n monitoring alertmanager-monitoring-kube-prometheus-alertmanager-0` |
-| Nothing works after the laptop slept | Run `colima start` and `minikube start`; everything comes back |
+| No Slack message | Check the Alertmanager logs: `kubectl -n monitoring logs deploy/alertmanager-deployment` |
+| Nothing works after the laptop slept | Run `colima start`, `minikube start` and `./port-forward.sh` again |
 
 ## Things I'd like to add
 
 - Burn-rate alerts based on the SLOs instead of fixed thresholds.
-- Logs with Loki so I can see them next to the metrics in Grafana.
+- Logs with Loki, like in the course exercises, to see them next to the metrics.
 - Autoscaling (HPA) based on traffic.
-- Deploying with Argo CD and trying a cloud cluster.
-- Storing the Slack webhook in a Kubernetes Secret.
+- Deploying with Argo CD.
+- Persistent storage for Prometheus (right now it uses `emptyDir`, so the data
+  is lost if the pod restarts).
 
 ## Cleanup
 
 ```bash
-./scripts/teardown.sh   # removes the app and the monitoring stack
-minikube delete         # removes the cluster
+./cleanup.sh            # removes the Helm release and the namespaces
+minikube stop           # stops the cluster
+colima stop
 ```
 
 ## Contributing and license

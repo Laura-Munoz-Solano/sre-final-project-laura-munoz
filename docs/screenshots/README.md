@@ -1,16 +1,14 @@
 # Screenshots
 
-Evidence of the working deployment. File names are referenced from the main README.
-
 | File | What it shows |
 |------|---------------|
-| `01-pods-running.png` | `kubectl get pods -A` with the app and monitoring pods running |
+| `01-pods-running.png` | Pods running in the `sre-app` and `monitoring` namespaces |
 | `02-app-metrics.png` | The app's `/metrics` endpoint |
-| `03-prometheus-targets.png` | Prometheus > Status > Targets with `sre-demo-app` UP |
-| `04-prometheus-query.png` | A PromQL query over `demo_http_requests_total` |
-| `05-prometheus-alerts.png` | Prometheus > Alerts with the `sre-demo-app` rules |
-| `06-grafana-dashboard.png` | The "SRE Demo App - Golden Signals" dashboard |
-| `07-alert-firing.png` | `DemoAppHighErrorRate` firing in Prometheus |
-| `08-alertmanager.png` | The alert received in Alertmanager |
-| `09-slack-notification.png` | The notification in Slack |
-| `10-github-actions.png` | A green CI/CD pipeline run |
+| `03-prometheus-targets.png` | Prometheus target health with the `sre-demo-app` job UP |
+| `04-prometheus-query.png` | Requests per second by endpoint in Prometheus |
+| `05-prometheus-alerts.png` | The alert rules in Prometheus |
+| `06-grafana-dashboard.png` | The Golden Signals dashboard in Grafana |
+| `07-alert-firing.png` | `HighErrorRate` firing in Prometheus |
+| `08-alertmanager.png` | The alert in Alertmanager |
+| `09-slack-notification.png` | The firing and resolved messages in Slack |
+| `10-github-actions.png` | The CI/CD pipeline run |

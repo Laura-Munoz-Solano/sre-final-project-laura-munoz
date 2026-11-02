@@ -1,0 +1,201 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana-deployment
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:latest
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: grafana-config-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: grafana-config-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+      volumes:
+        - name: grafana-config-datasources
+          configMap:
+            name: grafana-datasources-config
+        - name: grafana-config-dashboards
+          configMap:
+            name: grafana-dashboards-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  selector:
+    app: grafana
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: NodePort
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources-config
+  namespace: monitoring
+  labels:
+    app: grafana
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-service.monitoring.svc.cluster.local:9090
+        isDefault: true
+        editable: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-config
+  namespace: monitoring
+  labels:
+    app: grafana
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        options:
+          path: /etc/grafana/provisioning/dashboards
+  golden-signals.json: |
+    {
+      "uid": "sre-demo-app",
+      "title": "SRE Demo App - Golden Signals",
+      "timezone": "browser",
+      "refresh": "10s",
+      "time": { "from": "now-15m", "to": "now" },
+      "panels": [
+        {
+          "title": "Traffic (requests per second by endpoint)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{job=\"sre-demo-app\"}[2m])) by (endpoint)",
+              "legendFormat": "{{`{{ endpoint }}`}}"
+            }
+          ],
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 }
+        },
+        {
+          "title": "Traffic (requests per second by status code)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{job=\"sre-demo-app\"}[2m])) by (status)",
+              "legendFormat": "{{`{{ status }}`}}"
+            }
+          ],
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 }
+        },
+        {
+          "title": "Errors (5xx error rate)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "custom": { "axisSoftMax": 0.1 } } },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{job=\"sre-demo-app\", status=~\"5..\"}[2m])) / sum(rate(http_requests_total{job=\"sre-demo-app\"}[2m])) or vector(0)",
+              "legendFormat": "error rate"
+            }
+          ],
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 }
+        },
+        {
+          "title": "Latency (p50, p95, p99)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"sre-demo-app\"}[2m])) by (le))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"sre-demo-app\"}[2m])) by (le))",
+              "legendFormat": "p95"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"sre-demo-app\"}[2m])) by (le))",
+              "legendFormat": "p99"
+            }
+          ],
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 }
+        },
+        {
+          "title": "Saturation (requests in progress)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(http_requests_in_progress{job=\"sre-demo-app\"}) by (pod)",
+              "legendFormat": "{{`{{ pod }}`}}"
+            }
+          ],
+          "gridPos": { "x": 0, "y": 16, "w": 8, "h": 8 }
+        },
+        {
+          "title": "Saturation (memory per pod)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "bytes" } },
+          "targets": [
+            {
+              "expr": "sum(process_resident_memory_bytes{job=\"sre-demo-app\"}) by (pod)",
+              "legendFormat": "{{`{{ pod }}`}}"
+            }
+          ],
+          "gridPos": { "x": 8, "y": 16, "w": 8, "h": 8 }
+        },
+        {
+          "title": "Orders created per minute",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(orders_created_total{job=\"sre-demo-app\"}[2m])) by (product) * 60",
+              "legendFormat": "{{`{{ product }}`}}"
+            }
+          ],
+          "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 }
+        }
+      ],
+      "schemaVersion": 39,
+      "version": 1
+    }
+{{- end }}

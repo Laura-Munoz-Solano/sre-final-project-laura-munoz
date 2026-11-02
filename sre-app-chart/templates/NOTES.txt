@@ -1,0 +1,13 @@
+sre-demo-app was deployed in the "sre-app" namespace.
+{{- if .Values.monitoring.enabled }}
+Prometheus, Alertmanager and Grafana were deployed in the "monitoring" namespace.
+{{- end }}
+
+Check the pods:
+  kubectl get pods -n sre-app
+{{- if .Values.monitoring.enabled }}
+  kubectl get pods -n monitoring
+{{- end }}
+
+Open the UIs on localhost with:
+  ./port-forward.sh

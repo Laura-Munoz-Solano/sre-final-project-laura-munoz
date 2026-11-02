@@ -1,52 +1,41 @@
 # Contributing
 
-Thanks for your interest in improving this project. Contributions of any size
-are welcome: bug reports, documentation fixes, new alerts or dashboard panels.
+Thanks for your interest in this project! It's my final project for the SRE Academy, but suggestions and improvements are welcome.
 
-## Reporting issues
+## How to Contribute
 
-Open a GitHub issue and include:
+1. **Fork the Repository**
+   Use the GitHub UI to fork the repo into your own account.
 
-- what you expected to happen and what happened instead
-- steps to reproduce (commands, values files)
-- versions of Minikube, Kubernetes, Helm and the chart
+2. **Create a Feature Branch**
+   Name your branch clearly to reflect the change.
+   Example: `git checkout -b add-latency-panel`
 
-## Development setup
+3. **Make Your Changes**
+   Be sure to:
+   - Follow the existing folder structure and naming.
+   - Run the tests and the linter before committing:
+     `cd app && pytest && flake8 . --max-line-length=100`
+   - Check the chart with `helm lint ./sre-app-chart`.
+   - Test the full setup with `./cluster.sh` if you changed the chart.
 
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r app/requirements-dev.txt
-pytest app            # unit tests
-flake8 app            # lint
-helm lint charts/sre-demo-app
-```
+4. **Commit and Push**
+   Example:
+   `git add .`
+   `git commit -m "Add latency panel to the dashboard"`
+   `git push origin add-latency-panel`
 
-To try your change end to end, run `./scripts/setup.sh` against a local
-Minikube cluster.
+5. **Open a Pull Request**
+   - Include a descriptive title and a short summary of the change.
+   - The CI pipeline has to pass before merging.
 
-## Pull requests
+## Guidelines
 
-1. Fork the repository and create a branch from `main`
-   (`feature/<short-name>` or `fix/<short-name>`).
-2. Keep each pull request focused on a single change.
-3. Add or update tests when you change application behaviour.
-4. Update the README when you change deployment steps, metrics or alerts.
-5. Make sure the CI pipeline is green before asking for a review.
+- Write in clear English.
+- Never commit secrets (for example the Slack webhook URL).
+- New alerts need a `severity` and a `service` label, and a `summary` and `description`.
+- Keep the setup reproducible with `cluster.sh` and add cleanup steps for anything new.
 
-## Commit messages
+---
 
-Use short, imperative messages, ideally following
-[Conventional Commits](https://www.conventionalcommits.org/):
-`feat: add saturation alert`, `fix: correct p95 query`, `docs: update README`.
-
-## Conventions
-
-- **Metrics** use the `demo_` prefix, base units (seconds, bytes) and
-  low-cardinality labels (route templates, never raw paths or IDs).
-- **Alerts** must have `severity` and `service` labels plus `summary` and
-  `description` annotations, and should be actionable.
-- **Secrets** (such as the Slack webhook URL) are never committed.
-
-## Code of conduct
-
-Be respectful and constructive. Harassment of any kind is not tolerated.
+Thanks again for your contribution!
