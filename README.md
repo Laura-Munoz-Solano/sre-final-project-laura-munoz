@@ -33,7 +33,6 @@ Laura Muñoz, 2026
 - [Slack setup](#slack-setup)
 - [Testing an incident](#testing-an-incident)
 - [CI/CD](#cicd)
-- [Problems I ran into](#problems-i-ran-into)
 - [Screenshots](#screenshots)
 - [Troubleshooting](#troubleshooting)
 - [Things I'd like to add](#things-id-like-to-add)
@@ -382,42 +381,6 @@ runs on every push and pull request to `main`:
 
 Each job needs the previous ones to pass, so a broken image never gets
 published.
-
-## Problems I ran into
-
-This part took me the most time, so I wanted to write it down.
-
-**My first version used kube-prometheus-stack.** At first I installed the
-monitoring with the community Helm chart, which uses the Prometheus Operator,
-ServiceMonitors and PrometheusRules. It worked, but it hid a lot of what
-happens inside and it was far from what we did in the course. I rewrote it
-with my own manifests (like in exercises 12, 13 and 14), and now I understand
-each piece: the scrape config, the rules file, the Alertmanager config and the
-Grafana provisioning.
-
-**My graphs showed `endpoint="http"` instead of my routes.** This happened
-with the first version: the ServiceMonitor added its own `endpoint` label (the
-port name) and it replaced the one from my app. With my own scrape config I
-decide which labels are added (`namespace` and `pod`), so it doesn't happen
-anymore.
-
-**Prometheus only showed one target.** When I opened Prometheus I only saw a
-target called `prometheus` and none of my app. I had another Prometheus
-installed on my Mac from an earlier lab, already using port 9090, so the
-port-forward couldn't use it and the browser was showing the wrong
-Prometheus. I found it with `lsof -nP -iTCP:9090 -sTCP:LISTEN` and stopped it
-with `brew services stop prometheus`.
-
-**The load generator kept stopping.** When I restarted the port-forward, one
-request failed and the whole script stopped because of `set -e`. Now the
-script keeps sending traffic even if a request fails.
-
-**The memory panel in Grafana said "No data".** The query used container
-metrics that didn't return anything in Minikube on Colima. I changed it to
-`process_resident_memory_bytes`, which the app exposes itself.
-
-**Docker wasn't connecting.** `docker version` failed because my Docker CLI
-was pointing to Colima, which wasn't running. `colima start` fixed it.
 
 ## Screenshots
 
