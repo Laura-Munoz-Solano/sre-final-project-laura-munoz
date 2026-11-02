@@ -2,19 +2,16 @@
 
 ![CI/CD](https://github.com/Laura-Munoz-Solano/sre-final-project-laura-munoz/actions/workflows/ci.yml/badge.svg)
 
-This is my final project for the SRE Academy. It's a small Python app (a fake
-coffee shop orders API) running on Kubernetes, monitored with Prometheus and
-Grafana, with alerts that go through Alertmanager to a Slack channel.
+This is my final project for the SRE Academy. The goal was to deploy an
+application on Kubernetes and monitor it with Prometheus, Grafana and
+Alertmanager, with alerts sent to a Slack channel.
 
-The app itself is very simple on purpose. The point of the project was to
-practice the monitoring side: exposing metrics, collecting them, building a
-dashboard, writing alerts, and checking that an alert actually reaches me
-when something breaks.
+I kept the app simple (a small orders API in Flask) so I could focus on the
+monitoring part: metrics, dashboards and alerts.
 
-I built it the same way we worked in the course exercises: Colima and
-Minikube, my own Kubernetes manifests for Prometheus, Alertmanager and
-Grafana, a Helm chart to install everything together, and a `cluster.sh`
-script to set it all up.
+For the setup I used the same tools we worked with in the course: Colima and
+Minikube, Kubernetes manifests for each monitoring component, a Helm chart to
+deploy everything and a `cluster.sh` script to run the setup.
 
 Laura Muñoz, 2026
 
