@@ -19,6 +19,7 @@ Laura Muñoz, 2026
 
 - [What's included](#whats-included)
 - [How it works](#how-it-works)
+- [The app](#the-app)
 - [Repo structure](#repo-structure)
 - [What you need](#what-you-need)
 - [How to deploy it](#how-to-deploy-it)
@@ -90,6 +91,50 @@ The way I understand the flow:
    in a Kubernetes Secret, not in the ConfigMap.
 5. Grafana gets the Prometheus datasource and the dashboard from ConfigMaps,
    so they are saved in the repo instead of being created by hand in the UI.
+
+## The app
+
+The app is a small REST API for a coffee shop, written in Python with Flask.
+It doesn't use a database. The orders are kept in memory, so they reset when
+a pod restarts. That's enough for this project, because I only need the app
+to generate traffic and metrics.
+
+It runs on port 5000, with 2 replicas in Kubernetes.
+
+| Endpoint | Method | What it does |
+|----------|--------|--------------|
+| `/` | GET | Returns the service name and status |
+| `/api/orders` | GET | Shows how many orders there are per product |
+| `/api/orders` | POST | Creates an order (espresso, latte, cappuccino or americano). It can fail on purpose if `errorRate` is set |
+| `/api/slow` | GET | Takes between 0.8 and 2.5 seconds to answer. I use it to test the latency alert |
+| `/api/error` | GET | Always returns a 500 error. I use it to test the error rate alert |
+| `/healthz` and `/readyz` | GET | Liveness and readiness probes for Kubernetes |
+| `/metrics` | GET | Metrics for Prometheus |
+
+### Docker image
+
+The image is built from [`app/Dockerfile`](app/Dockerfile):
+
+- It's based on `python:3.12-slim`, to keep the image small.
+- It installs Flask and the Prometheus client from `requirements.txt`.
+- It only copies `app.py`. The tests are left out with `.dockerignore`.
+- It starts the app with `python app.py` on port 5000.
+
+On my machine, `cluster.sh` builds the image directly inside Minikube with
+`minikube image build -t sre-demo-app:1.0.0 ./app`, so I don't need to push
+it to a registry. That's why the Deployment uses `imagePullPolicy: IfNotPresent`.
+
+The CI pipeline also builds the image and publishes it to GitHub Container
+Registry as `ghcr.io/laura-munoz-solano/sre-demo-app`, tagged with `latest`
+and the commit SHA.
+
+To try the app with Docker only, without Kubernetes:
+
+```bash
+docker build -t sre-demo-app:1.0.0 ./app
+docker run -p 8080:5000 sre-demo-app:1.0.0
+curl http://localhost:8080/
+```
 
 ## Repo structure
 
